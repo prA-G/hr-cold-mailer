@@ -20,7 +20,7 @@ st.title("📧 Gmail HR Cold Email Sender")
 st.caption("Gmail App Password • Smart Excel • Mobile-safe Resume")
 
 # --------------------------------------------------
-# HELPER FUNCTIONS
+# HELPER FUNCTION 
 # --------------------------------------------------
 
 def normalize(col):
