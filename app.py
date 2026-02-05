@@ -17,10 +17,10 @@ st.set_page_config(
 )
 
 st.title("📧 Gmail HR Cold Email Sender")
-st.caption("Gmail App Password • Smart Excel • Mobile-safe Resume")
+st.caption("Gmail App Password • Smart Excel • Live Status • Safe Pause")
 
 # --------------------------------------------------
-# HELPER FUNCTION 
+# HELPER FUNCTIONS
 # --------------------------------------------------
 
 def normalize(col):
@@ -29,12 +29,16 @@ def normalize(col):
 
 
 def detect_columns(df):
-    """Auto-detect name, email, company columns"""
+    """
+    Auto-detect name, email, company columns
+    Accepts messy headers like:
+    HR_name, Hr Name, NAME, Email ID, Company Name, Organization, etc.
+    """
     normalized = {normalize(c): c for c in df.columns}
 
     name_keys = ["name", "hrname", "candidate", "person"]
     email_keys = ["email", "mail"]
-    company_keys = ["company", "organization", "org"]
+    company_keys = ["company", "organization", "org", "employer"]
 
     detected = {}
 
@@ -58,7 +62,7 @@ excel_file = st.file_uploader(
 )
 
 resume_file = st.file_uploader(
-    "📎 Upload Resume (PDF only)",
+    "📎 Upload Resume (PDF)",
     type=["pdf"]
 )
 
@@ -89,7 +93,6 @@ if st.button("🚀 Start Sending Emails"):
 
     if not all([
         excel_file,
-        resume_file,
         sender_email,
         sender_password,
         subject,
@@ -105,7 +108,7 @@ if st.button("🚀 Start Sending Emails"):
         st.error("❌ Unable to read Excel file")
         st.stop()
 
-    # Detect columns
+    # Detect required columns
     detected = detect_columns(df)
 
     if not all(k in detected for k in ["name", "email", "company"]):
@@ -127,13 +130,18 @@ if st.button("🚀 Start Sending Emails"):
         st.error("❌ No valid email records found")
         st.stop()
 
-    # Read resume ONCE (important for mobile)
-    resume_bytes = resume_file.read()
+    # Read resume ONCE (mobile-safe attachment)
+    resume_bytes = None
+    if resume_file is not None:
+        resume_bytes = resume_file.read()
 
     st.success("✅ Excel validated successfully")
     st.info(f"📊 Total Emails: {total}")
 
-    progress = st.progress(0)
+    # Live UI elements
+    status_text = st.empty()
+    progress_bar = st.progress(0)
+
     sent = 0
 
     try:
@@ -141,23 +149,25 @@ if st.button("🚀 Start Sending Emails"):
         server.starttls()
         server.login(sender_email, sender_password)
 
-        for i in range(0, total, batch_size):
-            batch_df = df.iloc[i:i + batch_size]
-            st.write(f"📦 Sending batch {i // batch_size + 1}")
+        for i in range(total):
+            row = df.iloc[i]
 
-            for _, row in batch_df.iterrows():
-                msg = MIMEMultipart()
-                msg["From"] = sender_email
-                msg["To"] = row["email"]
-                msg["Subject"] = subject
+            # LIVE STATUS
+            status_text.info(f"📨 Sending email {sent + 1} / {total}")
 
-                body = message_template.format(
-                    name=row["name"],
-                    company=row["company"]
-                )
-                msg.attach(MIMEText(body, "plain"))
+            msg = MIMEMultipart()
+            msg["From"] = sender_email
+            msg["To"] = row["email"]
+            msg["Subject"] = subject
 
-                # Attach resume (mobile-safe)
+            body = message_template.format(
+                name=row["name"],
+                company=row["company"]
+            )
+            msg.attach(MIMEText(body, "plain"))
+
+            # Attach resume if provided (mobile-safe)
+            if resume_bytes is not None:
                 attachment = MIMEBase("application", "pdf")
                 attachment.set_payload(resume_bytes)
                 encoders.encode_base64(attachment)
@@ -167,6 +177,7 @@ if st.button("🚀 Start Sending Emails"):
                 )
                 msg.attach(attachment)
 
+            try:
                 server.sendmail(
                     sender_email,
                     row["email"],
@@ -174,15 +185,29 @@ if st.button("🚀 Start Sending Emails"):
                 )
 
                 sent += 1
-                progress.progress(sent / total)
+                progress_bar.progress(sent / total)
                 time.sleep(email_delay)
 
-            if i + batch_size < total:
-                st.warning(f"⏸ Waiting {batch_delay} minutes before next batch")
+            except smtplib.SMTPException:
+                # Graceful pause on Gmail limit or block
+                status_text.warning(
+                    f"⏸ Sending paused\n\n"
+                    f"✅ {sent} out of {total} emails sent successfully"
+                )
+                server.quit()
+                st.stop()
+
+            # Batch delay handling
+            if batch_size and sent % batch_size == 0 and sent < total:
+                status_text.info(
+                    f"⏸ Batch complete. Waiting {batch_delay} minutes..."
+                )
                 time.sleep(batch_delay * 60)
 
         server.quit()
-        st.success(f"🎉 Successfully sent {sent} emails")
+        status_text.success(
+            f"🎉 Completed successfully: {sent} / {total} emails sent"
+        )
 
     except Exception as e:
-        st.error(f"❌ Error occurred: {e}")
+        st.error(f"❌ Unexpected error: {e}")
